@@ -1,0 +1,116 @@
+[package]
+name = "secret-store-sdk"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+authors = ["XJP Team"]
+description = "Rust SDK for XJP Secret Store Service"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/rickyjim626/secret-store-sdk"
+documentation = "https://docs.rs/secret-store-sdk"
+keywords = ["secret", "vault", "encryption", "configuration", "sdk"]
+categories = ["api-bindings", "cryptography", "config"]
+
+[features]
+default = ["rustls-tls"]
+rustls-tls = ["reqwest/rustls-tls", "reqwest/rustls-tls-native-roots"]
+native-tls = ["reqwest/native-tls"]
+blocking = ["reqwest/blocking", "moka/sync"]
+metrics = ["opentelemetry", "opentelemetry-prometheus"]
+wasm = ["reqwest/default", "getrandom/js", "instant/wasm-bindgen"]
+danger-insecure-http = []
+
+[dependencies]
+# HTTP Client
+reqwest = { version = "^0.12", default-features = false, features = ["json", "http2", "charset", "gzip", "brotli"] }
+
+# Async Runtime
+tokio = { version = "^1", features = ["macros", "rt-multi-thread", "time"] }
+
+# Serialization
+serde = { version = "^1", features = ["derive"] }
+serde_json = "^1"
+
+# Caching
+moka = { version = "^0.12", features = ["future"] }
+
+# Retry/Backoff
+backoff = { version = "^0.4", features = ["tokio"] }
+
+# Tracing/Logging
+tracing = "^0.1"
+tracing-subscriber = { version = "^0.3", optional = true }
+
+# Security
+secrecy = { version = "^0.8", features = ["serde"] }
+zeroize = { version = "^1", features = ["derive"] }
+
+# IDs and Time
+uuid = { version = "^1", features = ["v4", "serde"] }
+time = { version = "^0.3", features = ["serde", "formatting", "parsing"] }
+
+# Error Handling
+thiserror = "^1"
+
+# URL Encoding
+percent-encoding = "^2"
+
+# Base64
+base64 = "^0.22"
+
+# Optional: Metrics
+opentelemetry = { version = "^0.21", optional = true }
+opentelemetry-prometheus = { version = "^0.14", optional = true }
+
+# WASM Support
+getrandom = { version = "^0.2", optional = true }
+instant = { version = "^0.1", optional = true }
+
+# Async trait
+async-trait = "^0.1"
+
+# HTTP Types
+http = "^1"
+
+[dev-dependencies]
+tokio-test = "^0.4"
+wiremock = "^0.6"
+proptest = "^1"
+criterion = { version = "^0.5", features = ["html_reports"] }
+pretty_assertions = "^1"
+serial_test = "^3"
+env_logger = "^0.11"
+dotenv = "^0.15"
+anyhow = "^1"
+
+[[example]]
+name = "basic_usage"
+path = "examples/basic_usage.rs"
+
+[[example]]
+name = "batch_operations"
+path = "examples/batch_operations.rs"
+
+[[example]]
+name = "export_env"
+path = "examples/export_env.rs"
+
+[[example]]
+name = "with_cache"
+path = "examples/with_cache.rs"
+
+[[example]]
+name = "version_management"
+path = "examples/version_management.rs"
+
+[[example]]
+name = "audit_logs"
+path = "examples/audit_logs.rs"
+
+[[example]]
+name = "metrics"
+path = "examples/metrics.rs"
+
+[[bench]]
+name = "client_bench"
+harness = false
