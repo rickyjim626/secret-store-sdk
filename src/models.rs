@@ -210,9 +210,10 @@ pub struct ListSecretsResult {
 }
 
 /// Export format for batch operations
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ExportFormat {
     /// JSON format
+    #[default]
     Json,
     /// .env file format
     Dotenv,
@@ -369,6 +370,17 @@ pub enum EnvExport {
     Text(String),
 }
 
+/// Options for environment export
+#[derive(Debug, Clone, Default)]
+pub struct ExportEnvOpts {
+    /// Export format
+    pub format: ExportFormat,
+    /// Enable caching for this request
+    pub use_cache: bool,
+    /// If-None-Match header value for conditional requests
+    pub if_none_match: Option<String>,
+}
+
 /// Environment export in JSON format
 #[derive(Debug, Clone, Deserialize)]
 pub struct EnvJsonExport {
@@ -449,6 +461,20 @@ pub struct InitNamespaceResult {
     pub secrets_created: usize,
     /// Request ID
     pub request_id: String,
+}
+
+/// Result of namespace deletion
+#[derive(Debug, Clone, Deserialize)]
+pub struct DeleteNamespaceResult {
+    /// Success message
+    pub message: String,
+    /// Deleted namespace name
+    pub namespace: String,
+    /// Number of secrets deleted
+    pub secrets_deleted: usize,
+    /// Request ID from x-request-id header
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
 }
 
 /// List of secret versions
@@ -571,7 +597,7 @@ pub struct AuditEntry {
     #[serde(rename = "ip_address", skip_serializing_if = "Option::is_none")]
     pub ip_address: Option<String>,
     /// User agent
-    #[serde(rename = "user_agent", skip_serializing_if = "Option::is_none")]  
+    #[serde(rename = "user_agent", skip_serializing_if = "Option::is_none")]
     pub user_agent: Option<String>,
     /// Error message if failed
     #[serde(rename = "error", skip_serializing_if = "Option::is_none")]
@@ -615,6 +641,105 @@ pub struct EndpointInfo {
     pub health_url: String,
     /// Metrics URL
     pub metrics_url: String,
+}
+
+/// Health check result
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct HealthStatus {
+    /// Service status (healthy, degraded, unhealthy)
+    pub status: String,
+    /// ISO 8601 timestamp
+    pub timestamp: String,
+    /// Service version
+    pub version: Option<String>,
+    /// Additional checks (optional)
+    #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub checks: std::collections::HashMap<String, HealthCheckResult>,
+}
+
+/// Individual health check result
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct HealthCheckResult {
+    /// Check status (healthy, degraded, unhealthy)
+    pub status: String,
+    /// Optional detailed message
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    /// Optional error details
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// Duration in milliseconds
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
+}
+
+/// API Key creation request
+#[derive(Debug, Clone, Serialize)]
+pub struct CreateApiKeyRequest {
+    /// Key name/description
+    pub name: String,
+    /// Expiration time (ISO 8601)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<String>,
+    /// Allowed namespaces (empty = all)
+    #[serde(default)]
+    pub namespaces: Vec<String>,
+    /// Allowed permissions
+    pub permissions: Vec<String>,
+    /// Optional metadata
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<serde_json::Value>,
+}
+
+/// API Key information
+#[derive(Debug, Clone, Deserialize)]
+pub struct ApiKeyInfo {
+    /// Key ID
+    pub id: String,
+    /// Key name
+    pub name: String,
+    /// API key value (only returned on creation)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key: Option<SecretString>,
+    /// Creation time
+    pub created_at: String,
+    /// Expiration time
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<String>,
+    /// Last used time
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_used_at: Option<String>,
+    /// Is active
+    pub active: bool,
+    /// Allowed namespaces
+    pub namespaces: Vec<String>,
+    /// Permissions
+    pub permissions: Vec<String>,
+    /// Optional metadata
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<serde_json::Value>,
+}
+
+/// List API keys result
+#[derive(Debug, Clone, Deserialize)]
+pub struct ListApiKeysResult {
+    /// List of API keys
+    pub keys: Vec<ApiKeyInfo>,
+    /// Total count
+    pub total: usize,
+    /// Request ID
+    pub request_id: Option<String>,
+}
+
+/// Revoke API key result
+#[derive(Debug, Clone, Deserialize)]
+pub struct RevokeApiKeyResult {
+    /// Success message
+    pub message: String,
+    /// Revoked key ID
+    pub key_id: String,
+    /// Request ID
+    pub request_id: Option<String>,
 }
 
 #[cfg(test)]

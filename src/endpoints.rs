@@ -33,9 +33,9 @@ impl Endpoints {
     // Secrets
     pub fn get_secret(&self, namespace: &str, key: &str) -> String {
         self.url(&format!(
-            "{}/secrets/{}/{}", 
-            API_V2_BASE, 
-            encode_path(namespace), 
+            "{}/secrets/{}/{}",
+            API_V2_BASE,
+            encode_path(namespace),
             encode_path(key)
         ))
     }
@@ -50,8 +50,8 @@ impl Endpoints {
 
     pub fn list_secrets(&self, namespace: &str) -> String {
         self.url(&format!(
-            "{}/secrets/{}", 
-            API_V2_BASE, 
+            "{}/secrets/{}",
+            API_V2_BASE,
             encode_path(namespace)
         ))
     }
@@ -60,8 +60,8 @@ impl Endpoints {
     #[allow(dead_code)]
     pub fn batch_get(&self, namespace: &str) -> String {
         self.url(&format!(
-            "{}/secrets/{}/batch", 
-            API_V2_BASE, 
+            "{}/secrets/{}/batch",
+            API_V2_BASE,
             encode_path(namespace)
         ))
     }
@@ -75,9 +75,9 @@ impl Endpoints {
     #[allow(dead_code)]
     pub fn list_versions(&self, namespace: &str, key: &str) -> String {
         self.url(&format!(
-            "{}/secrets/{}/{}/versions", 
-            API_V2_BASE, 
-            encode_path(namespace), 
+            "{}/secrets/{}/{}/versions",
+            API_V2_BASE,
+            encode_path(namespace),
             encode_path(key)
         ))
     }
@@ -85,9 +85,9 @@ impl Endpoints {
     #[allow(dead_code)]
     pub fn get_version(&self, namespace: &str, key: &str, version: i32) -> String {
         self.url(&format!(
-            "{}/secrets/{}/{}/versions/{}", 
-            API_V2_BASE, 
-            encode_path(namespace), 
+            "{}/secrets/{}/{}/versions/{}",
+            API_V2_BASE,
+            encode_path(namespace),
             encode_path(key),
             version
         ))
@@ -96,9 +96,9 @@ impl Endpoints {
     #[allow(dead_code)]
     pub fn rollback(&self, namespace: &str, key: &str, version: i32) -> String {
         self.url(&format!(
-            "{}/secrets/{}/{}/rollback/{}", 
-            API_V2_BASE, 
-            encode_path(namespace), 
+            "{}/secrets/{}/{}/rollback/{}",
+            API_V2_BASE,
+            encode_path(namespace),
             encode_path(key),
             version
         ))
@@ -113,8 +113,8 @@ impl Endpoints {
     #[allow(dead_code)]
     pub fn get_namespace(&self, namespace: &str) -> String {
         self.url(&format!(
-            "{}/namespaces/{}", 
-            API_V2_BASE, 
+            "{}/namespaces/{}",
+            API_V2_BASE,
             encode_path(namespace)
         ))
     }
@@ -122,8 +122,16 @@ impl Endpoints {
     #[allow(dead_code)]
     pub fn init_namespace(&self, namespace: &str) -> String {
         self.url(&format!(
-            "{}/namespaces/{}/init", 
-            API_V2_BASE, 
+            "{}/namespaces/{}/init",
+            API_V2_BASE,
+            encode_path(namespace)
+        ))
+    }
+
+    pub fn delete_namespace(&self, namespace: &str) -> String {
+        self.url(&format!(
+            "{}/namespaces/{}",
+            API_V2_BASE,
             encode_path(namespace)
         ))
     }
@@ -131,11 +139,7 @@ impl Endpoints {
     // Environment
     #[allow(dead_code)]
     pub fn export_env(&self, namespace: &str) -> String {
-        self.url(&format!(
-            "{}/env/{}", 
-            API_V2_BASE, 
-            encode_path(namespace)
-        ))
+        self.url(&format!("{}/env/{}", API_V2_BASE, encode_path(namespace)))
     }
 
     // Audit
@@ -154,6 +158,28 @@ impl Endpoints {
     pub fn readyz(&self) -> String {
         self.url(&format!("{}/readyz", API_V2_BASE))
     }
+
+    // API Keys
+    pub fn list_api_keys(&self) -> String {
+        self.url(&format!("{}/api-keys", API_V2_BASE))
+    }
+
+    pub fn create_api_key(&self) -> String {
+        self.list_api_keys()
+    }
+
+    pub fn get_api_key(&self, key_id: &str) -> String {
+        self.url(&format!("{}/api-keys/{}", API_V2_BASE, encode_path(key_id)))
+    }
+
+    pub fn revoke_api_key(&self, key_id: &str) -> String {
+        self.get_api_key(key_id)
+    }
+
+    // Metrics
+    pub fn metrics(&self) -> String {
+        self.url(&format!("{}/metrics", API_V2_BASE))
+    }
 }
 
 #[cfg(test)]
@@ -163,29 +189,23 @@ mod tests {
     #[test]
     fn test_endpoints() {
         let endpoints = Endpoints::new("https://api.example.com");
-        
+
         assert_eq!(
             endpoints.get_secret("prod", "db-pass"),
             "https://api.example.com/api/v2/secrets/prod/db-pass"
         );
-        
+
         assert_eq!(
             endpoints.list_secrets("test namespace"),
             "https://api.example.com/api/v2/secrets/test%20namespace"
         );
-        
-        assert_eq!(
-            endpoints.discovery(),
-            "https://api.example.com/api/v2"
-        );
+
+        assert_eq!(endpoints.discovery(), "https://api.example.com/api/v2");
     }
 
     #[test]
     fn test_trailing_slash() {
         let endpoints = Endpoints::new("https://api.example.com/");
-        assert_eq!(
-            endpoints.discovery(),
-            "https://api.example.com/api/v2"
-        );
+        assert_eq!(endpoints.discovery(), "https://api.example.com/api/v2");
     }
 }

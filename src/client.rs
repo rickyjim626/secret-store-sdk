@@ -278,12 +278,7 @@ impl Client {
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn get_secret(
-        &self,
-        namespace: &str,
-        key: &str,
-        opts: GetOpts,
-    ) -> Result<Secret> {
+    pub async fn get_secret(&self, namespace: &str, key: &str, opts: GetOpts) -> Result<Secret> {
         let cache_key = format!("{}/{}", namespace, key);
 
         // Check cache if enabled and requested
@@ -443,17 +438,16 @@ impl Client {
     }
 
     /// List secrets in a namespace
-    pub async fn list_secrets(
-        &self,
-        namespace: &str,
-        opts: ListOpts,
-    ) -> Result<ListSecretsResult> {
+    pub async fn list_secrets(&self, namespace: &str, opts: ListOpts) -> Result<ListSecretsResult> {
         // Build URL with query parameters
         let mut url = self.endpoints.list_secrets(namespace);
-        
+
         let mut query_parts = Vec::new();
         if let Some(prefix) = &opts.prefix {
-            query_parts.push(format!("prefix={}", percent_encoding::utf8_percent_encode(prefix, percent_encoding::NON_ALPHANUMERIC)));
+            query_parts.push(format!(
+                "prefix={}",
+                percent_encoding::utf8_percent_encode(prefix, percent_encoding::NON_ALPHANUMERIC)
+            ));
         }
         if let Some(limit) = opts.limit {
             query_parts.push(format!("limit={}", limit));
@@ -480,18 +474,24 @@ impl Client {
         format: ExportFormat,
     ) -> Result<BatchGetResult> {
         let mut url = self.endpoints.batch_get(namespace);
-        
+
         // Build query parameters
         match &keys {
             BatchKeys::Keys(key_list) => {
                 let keys_param = key_list.join(",");
-                url.push_str(&format!("?keys={}", percent_encoding::utf8_percent_encode(&keys_param, percent_encoding::NON_ALPHANUMERIC)));
+                url.push_str(&format!(
+                    "?keys={}",
+                    percent_encoding::utf8_percent_encode(
+                        &keys_param,
+                        percent_encoding::NON_ALPHANUMERIC
+                    )
+                ));
             }
             BatchKeys::All => {
                 url.push_str("?wildcard=true");
             }
         }
-        
+
         // Add format parameter
         let separator = if url.contains('?') { '&' } else { '?' };
         url.push_str(&format!("{}format={}", separator, format.as_str()));
@@ -558,25 +558,85 @@ impl Client {
     }
 
     /// Export secrets as environment variables
-    pub async fn export_env(
-        &self,
-        namespace: &str,
-        format: ExportFormat,
-    ) -> Result<EnvExport> {
+    ///
+    /// Exports all secrets from a namespace in the specified format.
+    /// Supports conditional requests using ETag for efficient caching.
+    ///
+    /// # Arguments
+    ///
+    /// * `namespace` - The namespace to export
+    /// * `opts` - Export options including format and conditional request headers
+    ///
+    /// # Returns
+    ///
+    /// Returns `EnvExport::Json` for JSON format or `EnvExport::Text` for other formats.
+    ///
+    /// # Errors
+    ///
+    /// * Returns `Error::Http` with status 304 if content hasn't changed (when using if_none_match)
+    /// * Returns other errors for authentication, network, or server issues
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use secret_store_sdk::{Client, ClientBuilder, Auth, ExportEnvOpts, ExportFormat};
+    /// # async fn example(client: &Client) -> Result<(), Box<dyn std::error::Error>> {
+    /// // Simple export
+    /// let opts = ExportEnvOpts {
+    ///     format: ExportFormat::Dotenv,
+    ///     ..Default::default()
+    /// };
+    /// let export = client.export_env("production", opts).await?;
+    ///
+    /// // Conditional export with ETag
+    /// let opts = ExportEnvOpts {
+    ///     format: ExportFormat::Json,
+    ///     use_cache: true,
+    ///     if_none_match: Some("previous-etag".to_string()),
+    /// };
+    /// match client.export_env("production", opts).await {
+    ///     Ok(export) => println!("Content updated"),
+    ///     Err(e) if e.status_code() == Some(304) => println!("Not modified"),
+    ///     Err(e) => return Err(e.into()),
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn export_env(&self, namespace: &str, opts: ExportEnvOpts) -> Result<EnvExport> {
         let mut url = self.endpoints.export_env(namespace);
-        url.push_str(&format!("?format={}", format.as_str()));
+        url.push_str(&format!("?format={}", opts.format.as_str()));
 
         // Build request
-        let request = self.build_request(Method::GET, &url)?;
+        let mut request = self.build_request(Method::GET, &url)?;
+
+        // Add conditional header if provided
+        if let Some(etag) = &opts.if_none_match {
+            request = request.header(reqwest::header::IF_NONE_MATCH, etag);
+        }
+
         let response = self.execute_with_retry(request).await?;
 
-        // Check status
+        // Handle 304 Not Modified
+        if response.status() == StatusCode::NOT_MODIFIED {
+            return Err(Error::Http {
+                status: 304,
+                category: "not_modified".to_string(),
+                message: "Environment export not modified".to_string(),
+                request_id: header_str(response.headers(), "x-request-id"),
+            });
+        }
+
+        // Check other error statuses
         if !response.status().is_success() {
             return Err(self.parse_error_response(response).await);
         }
 
+        // TODO: Implement caching if opts.use_cache is true
+        // Cache key could be: namespace/env/{format}
+        // Would need to extract ETag from response headers
+
         // Parse response based on format
-        match format {
+        match opts.format {
             ExportFormat::Json => {
                 let json_result: EnvJsonExport = response.json().await.map_err(Error::from)?;
                 Ok(EnvExport::Json(json_result))
@@ -615,15 +675,54 @@ impl Client {
     }
 
     /// Initialize a namespace with a template
+    ///
+    /// Initializes a new namespace using a predefined template to create
+    /// a set of initial secrets.
+    ///
+    /// # Arguments
+    ///
+    /// * `namespace` - The namespace to initialize
+    /// * `template` - The template configuration
+    /// * `idempotency_key` - Optional idempotency key to prevent duplicate initialization
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use secret_store_sdk::{Client, ClientBuilder, Auth, NamespaceTemplate};
+    /// # use serde_json::json;
+    /// # async fn example(client: &Client) -> Result<(), Box<dyn std::error::Error>> {
+    /// let template = NamespaceTemplate {
+    ///     template: "web-app".to_string(),
+    ///     params: json!({
+    ///         "environment": "staging",
+    ///         "region": "us-west-2"
+    ///     }),
+    /// };
+    ///
+    /// let result = client.init_namespace(
+    ///     "staging-app",
+    ///     template,
+    ///     Some("init-staging-12345".to_string())
+    /// ).await?;
+    /// println!("Created {} secrets", result.secrets_created);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn init_namespace(
         &self,
         namespace: &str,
         template: NamespaceTemplate,
+        idempotency_key: Option<String>,
     ) -> Result<InitNamespaceResult> {
         let url = self.endpoints.init_namespace(namespace);
         let mut request = self.build_request(Method::POST, &url)?;
         request = request.json(&template);
-        
+
+        // Add idempotency key if provided
+        if let Some(key) = idempotency_key {
+            request = request.header("X-Idempotency-Key", key);
+        }
+
         let response = self.execute_with_retry(request).await?;
 
         if !response.status().is_success() {
@@ -631,6 +730,146 @@ impl Client {
         }
 
         self.parse_json_response(response).await
+    }
+
+    /// Delete a namespace and all its secrets
+    ///
+    /// **Warning**: This operation is irreversible and will delete all secrets
+    /// in the namespace. Use with extreme caution.
+    ///
+    /// This operation may take some time for namespaces with many secrets.
+    /// The response includes the number of secrets that were deleted.
+    ///
+    /// # Arguments
+    ///
+    /// * `namespace` - The namespace to delete
+    ///
+    /// # Returns
+    ///
+    /// A `DeleteNamespaceResult` containing deletion details.
+    ///
+    /// # Errors
+    ///
+    /// * `Error::Http` with status 404 if the namespace doesn't exist
+    /// * `Error::Http` with status 403 if deletion is forbidden
+    /// * `Error::Http` with status 409 if namespace has protection enabled
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use secret_store_sdk::{Client, ClientBuilder, Auth};
+    /// # async fn example(client: &Client) -> Result<(), Box<dyn std::error::Error>> {
+    /// let result = client.delete_namespace("test-namespace").await?;
+    /// println!("Deleted {} secrets from namespace {}",
+    ///     result.secrets_deleted,
+    ///     result.namespace
+    /// );
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn delete_namespace(&self, namespace: &str) -> Result<DeleteNamespaceResult> {
+        // Clear all cached entries for this namespace
+        if let Some(cache) = &self.cache {
+            // TODO: Optimize to only clear entries for this specific namespace
+            // For now, we'll invalidate all cache to ensure consistency
+            cache.invalidate_all();
+            debug!(
+                "Cleared all cache entries due to namespace deletion: {}",
+                namespace
+            );
+        }
+
+        // Build request
+        let url = self.endpoints.delete_namespace(namespace);
+        let request = self.build_request(Method::DELETE, &url)?;
+
+        // Execute with retry
+        let response = self.execute_with_retry(request).await?;
+
+        // Check status
+        if !response.status().is_success() {
+            return Err(self.parse_error_response(response).await);
+        }
+
+        // Extract request ID from headers
+        let request_id = header_str(response.headers(), "x-request-id");
+
+        // Parse response
+        let mut result: DeleteNamespaceResult = self.parse_json_response(response).await?;
+
+        // Set request_id if not already in the response body
+        if result.request_id.is_none() {
+            result.request_id = request_id;
+        }
+
+        Ok(result)
+    }
+
+    /// Delete a namespace and all its secrets with idempotency support
+    ///
+    /// Same as `delete_namespace` but with idempotency key support for safe retries.
+    ///
+    /// # Arguments
+    ///
+    /// * `namespace` - The namespace to delete
+    /// * `idempotency_key` - Optional idempotency key to prevent duplicate deletion
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use secret_store_sdk::{Client, ClientBuilder, Auth};
+    /// # async fn example(client: &Client) -> Result<(), Box<dyn std::error::Error>> {
+    /// let result = client.delete_namespace_idempotent(
+    ///     "test-namespace",
+    ///     Some("delete-ns-12345".to_string())
+    /// ).await?;
+    /// println!("Deleted {} secrets", result.secrets_deleted);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn delete_namespace_idempotent(
+        &self,
+        namespace: &str,
+        idempotency_key: Option<String>,
+    ) -> Result<DeleteNamespaceResult> {
+        // Clear all cached entries for this namespace
+        if let Some(cache) = &self.cache {
+            cache.invalidate_all();
+            debug!(
+                "Cleared all cache entries due to namespace deletion: {}",
+                namespace
+            );
+        }
+
+        // Build request
+        let url = self.endpoints.delete_namespace(namespace);
+        let mut request = self.build_request(Method::DELETE, &url)?;
+
+        // Add idempotency key if provided
+        if let Some(key) = idempotency_key {
+            request = request.header("X-Idempotency-Key", key);
+        }
+
+        // Execute with retry
+        let response = self.execute_with_retry(request).await?;
+
+        // Check status
+        if !response.status().is_success() {
+            return Err(self.parse_error_response(response).await);
+        }
+
+        // Extract request ID from headers
+        let request_id = header_str(response.headers(), "x-request-id");
+
+        // Parse response
+        let mut result: DeleteNamespaceResult = self.parse_json_response(response).await?;
+
+        // Set request_id if not already in the response body
+        if result.request_id.is_none() {
+            result.request_id = request_id;
+        }
+
+        Ok(result)
     }
 
     /// List versions of a secret
@@ -645,12 +884,7 @@ impl Client {
     }
 
     /// Get a specific version of a secret
-    pub async fn get_version(
-        &self,
-        namespace: &str,
-        key: &str,
-        version: i32,
-    ) -> Result<Secret> {
+    pub async fn get_version(&self, namespace: &str, key: &str, version: i32) -> Result<Secret> {
         // Build and execute request
         let url = self.endpoints.get_version(namespace, key, version);
         let request = self.build_request(Method::GET, &url)?;
@@ -690,22 +924,40 @@ impl Client {
         // Build URL with query parameters
         let mut url = self.endpoints.audit();
         let mut params = Vec::new();
-        
+
         // Add query parameters
         if let Some(namespace) = &query.namespace {
-            params.push(format!("namespace={}", percent_encoding::utf8_percent_encode(namespace, percent_encoding::NON_ALPHANUMERIC)));
+            params.push(format!(
+                "namespace={}",
+                percent_encoding::utf8_percent_encode(
+                    namespace,
+                    percent_encoding::NON_ALPHANUMERIC
+                )
+            ));
         }
         if let Some(actor) = &query.actor {
-            params.push(format!("actor={}", percent_encoding::utf8_percent_encode(actor, percent_encoding::NON_ALPHANUMERIC)));
+            params.push(format!(
+                "actor={}",
+                percent_encoding::utf8_percent_encode(actor, percent_encoding::NON_ALPHANUMERIC)
+            ));
         }
         if let Some(action) = &query.action {
-            params.push(format!("action={}", percent_encoding::utf8_percent_encode(action, percent_encoding::NON_ALPHANUMERIC)));
+            params.push(format!(
+                "action={}",
+                percent_encoding::utf8_percent_encode(action, percent_encoding::NON_ALPHANUMERIC)
+            ));
         }
         if let Some(from) = &query.from {
-            params.push(format!("from={}", percent_encoding::utf8_percent_encode(from, percent_encoding::NON_ALPHANUMERIC)));
+            params.push(format!(
+                "from={}",
+                percent_encoding::utf8_percent_encode(from, percent_encoding::NON_ALPHANUMERIC)
+            ));
         }
         if let Some(to) = &query.to {
-            params.push(format!("to={}", percent_encoding::utf8_percent_encode(to, percent_encoding::NON_ALPHANUMERIC)));
+            params.push(format!(
+                "to={}",
+                percent_encoding::utf8_percent_encode(to, percent_encoding::NON_ALPHANUMERIC)
+            ));
         }
         if let Some(success) = query.success {
             params.push(format!("success={}", success));
@@ -716,18 +968,218 @@ impl Client {
         if let Some(offset) = query.offset {
             params.push(format!("offset={}", offset));
         }
-        
+
         if !params.is_empty() {
             url.push('?');
             url.push_str(&params.join("&"));
         }
-        
+
         // Build and execute request
         let request = self.build_request(Method::GET, &url)?;
         let response = self.execute_with_retry(request).await?;
-        
+
         // Parse response
         self.parse_json_response(response).await
+    }
+
+    /// List all API keys
+    ///
+    /// Retrieves a list of all API keys associated with the current account.
+    /// The response includes metadata about each key but not the key values themselves.
+    ///
+    /// # Returns
+    ///
+    /// A `ListApiKeysResult` containing the list of API keys and total count.
+    ///
+    /// # Errors
+    ///
+    /// * `Error::Http` with status 403 if not authorized to list keys
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use secret_store_sdk::{Client, ClientBuilder, Auth};
+    /// # async fn example(client: &Client) -> Result<(), Box<dyn std::error::Error>> {
+    /// let keys = client.list_api_keys().await?;
+    /// for key in &keys.keys {
+    ///     println!("Key {}: {} (active: {})", key.id, key.name, key.active);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn list_api_keys(&self) -> Result<ListApiKeysResult> {
+        let url = self.endpoints.list_api_keys();
+        let request = self.build_request(Method::GET, &url)?;
+        let response = self.execute_with_retry(request).await?;
+
+        if !response.status().is_success() {
+            return Err(self.parse_error_response(response).await);
+        }
+
+        let request_id = header_str(response.headers(), "x-request-id");
+        let mut result: ListApiKeysResult = self.parse_json_response(response).await?;
+
+        if result.request_id.is_none() {
+            result.request_id = request_id;
+        }
+
+        Ok(result)
+    }
+
+    /// Create a new API key
+    ///
+    /// Creates a new API key with the specified permissions and restrictions.
+    /// The key value is only returned in the creation response and cannot be retrieved later.
+    ///
+    /// # Arguments
+    ///
+    /// * `request` - The API key creation request containing name, permissions, etc.
+    /// * `idempotency_key` - Optional idempotency key to prevent duplicate creation
+    ///
+    /// # Returns
+    ///
+    /// An `ApiKeyInfo` containing the newly created key details including the key value.
+    ///
+    /// # Security
+    ///
+    /// The returned API key value should be stored securely. It cannot be retrieved
+    /// again after this call.
+    ///
+    /// # Errors
+    ///
+    /// * `Error::Http` with status 403 if not authorized to create keys
+    /// * `Error::Http` with status 400 for invalid permissions or parameters
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use secret_store_sdk::{Client, ClientBuilder, Auth, CreateApiKeyRequest};
+    /// # use secrecy::ExposeSecret;
+    /// # async fn example(client: &Client) -> Result<(), Box<dyn std::error::Error>> {
+    /// let request = CreateApiKeyRequest {
+    ///     name: "CI/CD Pipeline Key".to_string(),
+    ///     expires_at: Some("2024-12-31T23:59:59Z".to_string()),
+    ///     namespaces: vec!["production".to_string()],
+    ///     permissions: vec!["read".to_string()],
+    ///     metadata: None,
+    /// };
+    ///
+    /// let key_info = client.create_api_key(request, Some("unique-key-123".to_string())).await?;
+    /// if let Some(key) = &key_info.key {
+    ///     println!("New API key: {}", key.expose_secret());
+    ///     // Store this securely - it won't be available again!
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn create_api_key(
+        &self,
+        request: CreateApiKeyRequest,
+        idempotency_key: Option<String>,
+    ) -> Result<ApiKeyInfo> {
+        let url = self.endpoints.create_api_key();
+        let mut req = self.build_request(Method::POST, &url)?;
+        req = req.json(&request);
+
+        // Add idempotency key if provided
+        if let Some(key) = idempotency_key {
+            req = req.header("X-Idempotency-Key", key);
+        }
+
+        let response = self.execute_with_retry(req).await?;
+
+        if !response.status().is_success() {
+            return Err(self.parse_error_response(response).await);
+        }
+
+        self.parse_json_response(response).await
+    }
+
+    /// Get API key details
+    ///
+    /// Retrieves detailed information about a specific API key.
+    /// Note that the key value itself is never returned for security reasons.
+    ///
+    /// # Arguments
+    ///
+    /// * `key_id` - The ID of the API key to retrieve
+    ///
+    /// # Returns
+    ///
+    /// An `ApiKeyInfo` with the key's metadata (without the key value).
+    ///
+    /// # Errors
+    ///
+    /// * `Error::Http` with status 404 if the key doesn't exist
+    /// * `Error::Http` with status 403 if not authorized to view the key
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use secret_store_sdk::{Client, ClientBuilder, Auth};
+    /// # async fn example(client: &Client) -> Result<(), Box<dyn std::error::Error>> {
+    /// let key_info = client.get_api_key("key_123abc").await?;
+    /// println!("Key {} last used: {:?}", key_info.name, key_info.last_used_at);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn get_api_key(&self, key_id: &str) -> Result<ApiKeyInfo> {
+        let url = self.endpoints.get_api_key(key_id);
+        let request = self.build_request(Method::GET, &url)?;
+        let response = self.execute_with_retry(request).await?;
+
+        if !response.status().is_success() {
+            return Err(self.parse_error_response(response).await);
+        }
+
+        self.parse_json_response(response).await
+    }
+
+    /// Revoke an API key
+    ///
+    /// Revokes an API key, immediately invalidating it for future use.
+    /// This operation is irreversible.
+    ///
+    /// # Arguments
+    ///
+    /// * `key_id` - The ID of the API key to revoke
+    ///
+    /// # Returns
+    ///
+    /// A `RevokeApiKeyResult` confirming the revocation.
+    ///
+    /// # Errors
+    ///
+    /// * `Error::Http` with status 404 if the key doesn't exist
+    /// * `Error::Http` with status 403 if not authorized to revoke the key
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use secret_store_sdk::{Client, ClientBuilder, Auth};
+    /// # async fn example(client: &Client) -> Result<(), Box<dyn std::error::Error>> {
+    /// let result = client.revoke_api_key("key_123abc").await?;
+    /// println!("Revoked key: {}", result.key_id);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn revoke_api_key(&self, key_id: &str) -> Result<RevokeApiKeyResult> {
+        let url = self.endpoints.revoke_api_key(key_id);
+        let request = self.build_request(Method::DELETE, &url)?;
+        let response = self.execute_with_retry(request).await?;
+
+        if !response.status().is_success() {
+            return Err(self.parse_error_response(response).await);
+        }
+
+        let request_id = header_str(response.headers(), "x-request-id");
+        let mut result: RevokeApiKeyResult = self.parse_json_response(response).await?;
+
+        if result.request_id.is_none() {
+            result.request_id = request_id;
+        }
+
+        Ok(result)
     }
 
     /// Get API discovery information
@@ -744,13 +1196,145 @@ impl Client {
     }
 
     /// Check liveness
+    ///
+    /// Performs a simple liveness check against the service.
+    /// Returns `Ok(())` if the service is alive and responding.
+    ///
+    /// This endpoint is typically used by Kubernetes liveness probes.
+    /// It does not check dependencies and should respond quickly.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the service is not responding or returns
+    /// a non-2xx status code.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use secret_store_sdk::{Client, ClientBuilder, Auth};
+    /// # async fn example(client: &Client) -> Result<(), Box<dyn std::error::Error>> {
+    /// match client.livez().await {
+    ///     Ok(()) => println!("Service is alive"),
+    ///     Err(e) => eprintln!("Service is down: {}", e),
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn livez(&self) -> Result<()> {
-        todo!("livez implementation")
+        let url = self.endpoints.livez();
+        let request = self.build_request(Method::GET, &url)?;
+
+        // Execute without retry for health checks
+        let response = self.execute_without_retry(request).await?;
+
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            Err(self.parse_error_response(response).await)
+        }
     }
 
-    /// Check readiness
-    pub async fn readyz(&self) -> Result<()> {
-        todo!("readyz implementation")
+    /// Check readiness with detailed status
+    ///
+    /// Performs a comprehensive readiness check that may include
+    /// checking dependencies (database, cache, etc.).
+    ///
+    /// This endpoint is typically used by Kubernetes readiness probes
+    /// to determine if the service is ready to accept traffic.
+    ///
+    /// # Returns
+    ///
+    /// Returns a `HealthStatus` with details about the service health
+    /// including individual component checks.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the service is not ready or if the
+    /// request fails.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use secret_store_sdk::{Client, ClientBuilder, Auth};
+    /// # async fn example(client: &Client) -> Result<(), Box<dyn std::error::Error>> {
+    /// let health = client.readyz().await?;
+    /// println!("Service status: {}", health.status);
+    ///
+    /// for (check, result) in &health.checks {
+    ///     println!("  {}: {} ({}ms)",
+    ///         check,
+    ///         result.status,
+    ///         result.duration_ms.unwrap_or(0)
+    ///     );
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn readyz(&self) -> Result<HealthStatus> {
+        let url = self.endpoints.readyz();
+        let request = self.build_request(Method::GET, &url)?;
+
+        // Execute without retry for health checks
+        let response = self.execute_without_retry(request).await?;
+
+        if response.status().is_success() {
+            self.parse_json_response(response).await
+        } else {
+            Err(self.parse_error_response(response).await)
+        }
+    }
+
+    /// Get service metrics
+    ///
+    /// Retrieves metrics from the service in Prometheus format.
+    /// This endpoint may require special authentication using a metrics token.
+    ///
+    /// # Arguments
+    ///
+    /// * `metrics_token` - Optional metrics-specific authentication token.
+    ///   If not provided, uses the client's default authentication.
+    ///
+    /// # Returns
+    ///
+    /// Returns the metrics as a raw string in Prometheus exposition format.
+    ///
+    /// # Errors
+    ///
+    /// * `Error::Http` with status 401 if authentication fails
+    /// * `Error::Http` with status 403 if not authorized to view metrics
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use secret_store_sdk::{Client, ClientBuilder, Auth};
+    /// # async fn example(client: &Client) -> Result<(), Box<dyn std::error::Error>> {
+    /// // Using default authentication
+    /// let metrics = client.metrics(None).await?;
+    /// println!("Metrics:\n{}", metrics);
+    ///
+    /// // Using specific metrics token
+    /// let metrics = client.metrics(Some("metrics-token-xyz")).await?;
+    /// println!("Metrics with token:\n{}", metrics);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn metrics(&self, metrics_token: Option<&str>) -> Result<String> {
+        let url = self.endpoints.metrics();
+        let mut request = self.build_request(Method::GET, &url)?;
+
+        // Add metrics-specific token if provided
+        if let Some(token) = metrics_token {
+            request = request.header("X-Metrics-Token", token);
+        }
+
+        // Execute without retry for metrics endpoint
+        let response = self.execute_without_retry(request).await?;
+
+        if response.status().is_success() {
+            response.text().await.map_err(Error::from)
+        } else {
+            Err(self.parse_error_response(response).await)
+        }
     }
 
     // Helper methods
@@ -772,7 +1356,10 @@ impl Client {
     }
 
     /// Execute a request with retry logic
-    async fn execute_with_retry(&self, request_builder: reqwest::RequestBuilder) -> Result<Response> {
+    async fn execute_with_retry(
+        &self,
+        request_builder: reqwest::RequestBuilder,
+    ) -> Result<Response> {
         let mut token_refresh_count = 0;
         let max_retries = self.config.retries;
         let auth = &self.config.auth;
@@ -792,9 +1379,10 @@ impl Client {
 
         loop {
             // Get current auth header (may be refreshed)
-            let (auth_header, auth_value) = auth.get_header().await.map_err(|e| {
-                Error::Config(format!("Failed to get auth header: {}", e))
-            })?;
+            let (auth_header, auth_value) = auth
+                .get_header()
+                .await
+                .map_err(|e| Error::Config(format!("Failed to get auth header: {}", e)))?;
 
             // Clone the base request and add current auth header
             let req_with_auth = request_builder
@@ -821,110 +1409,131 @@ impl Client {
             let retry_count_clone = retry_count.clone();
 
             // Execute with backoff retry
-            let result = retry_notify(backoff, || async {
-                let current_retry = retry_count.load(std::sync::atomic::Ordering::Relaxed);
-                // Clone request for this attempt
-                let req = req_with_auth
-                    .try_clone()
-                    .ok_or_else(|| {
-                        backoff::Error::Permanent(Error::Other(
-                            "Request cannot be cloned".to_string(),
-                        ))
-                    })?
-                    .build()
-                    .map_err(|e| {
-                        backoff::Error::Permanent(Error::Other(format!("Failed to build request: {}", e)))
-                    })?;
+            let result = retry_notify(
+                backoff,
+                || async {
+                    let current_retry = retry_count.load(std::sync::atomic::Ordering::Relaxed);
+                    // Clone request for this attempt
+                    let req = req_with_auth
+                        .try_clone()
+                        .ok_or_else(|| {
+                            backoff::Error::Permanent(Error::Other(
+                                "Request cannot be cloned".to_string(),
+                            ))
+                        })?
+                        .build()
+                        .map_err(|e| {
+                            backoff::Error::Permanent(Error::Other(format!(
+                                "Failed to build request: {}",
+                                e
+                            )))
+                        })?;
 
-                // Track active connections
-                #[cfg(feature = "metrics")]
-                self.metrics.inc_active_connections();
-                
-                // Start timing request
-                #[cfg(feature = "metrics")]
-                let start_time = std::time::Instant::now();
-                
-                let response_result = self.http.execute(req).await;
-                
-                // Decrement active connections
-                #[cfg(feature = "metrics")]
-                self.metrics.dec_active_connections();
-                
-                match response_result {
-                    Ok(response) => {
-                        let status = response.status();
+                    // Track active connections
+                    #[cfg(feature = "metrics")]
+                    self.metrics.inc_active_connections();
 
-                        // Handle 401 - but don't retry within backoff if we can refresh token
-                        if status == StatusCode::UNAUTHORIZED
-                            && token_refresh_count == 0
-                            && auth.supports_refresh()
-                        {
-                            // Return a special error that we'll handle outside the backoff retry
-                            return Err(backoff::Error::Permanent(Error::Http {
-                                status: 401,
-                                category: "auth_refresh_needed".to_string(),
-                                message: "Token refresh required".to_string(),
-                                request_id: header_str(response.headers(), "x-request-id"),
-                            }));
-                        }
+                    // Start timing request
+                    #[cfg(feature = "metrics")]
+                    let start_time = std::time::Instant::now();
 
-                        // Check if error is retryable
-                        if status.is_server_error()
-                            || status == StatusCode::TOO_MANY_REQUESTS
-                            || status == StatusCode::REQUEST_TIMEOUT
-                        {
-                            let error = self.parse_error_response(response).await;
-                            if error.is_retryable() && current_retry < max_retries as usize {
-                                debug!("Retrying request due to: {:?}", error);
-                                #[cfg(feature = "metrics")]
-                                self.metrics.record_retry((current_retry + 1) as u32, &status.to_string());
-                                return Err(backoff::Error::transient(error));
-                            } else {
+                    let response_result = self.http.execute(req).await;
+
+                    // Decrement active connections
+                    #[cfg(feature = "metrics")]
+                    self.metrics.dec_active_connections();
+
+                    match response_result {
+                        Ok(response) => {
+                            let status = response.status();
+
+                            // Handle 401 - but don't retry within backoff if we can refresh token
+                            if status == StatusCode::UNAUTHORIZED
+                                && token_refresh_count == 0
+                                && auth.supports_refresh()
+                            {
+                                // Return a special error that we'll handle outside the backoff retry
+                                return Err(backoff::Error::Permanent(Error::Http {
+                                    status: 401,
+                                    category: "auth_refresh_needed".to_string(),
+                                    message: "Token refresh required".to_string(),
+                                    request_id: header_str(response.headers(), "x-request-id"),
+                                }));
+                            }
+
+                            // Check if error is retryable
+                            if status.is_server_error()
+                                || status == StatusCode::TOO_MANY_REQUESTS
+                                || status == StatusCode::REQUEST_TIMEOUT
+                            {
+                                let error = self.parse_error_response(response).await;
+                                if error.is_retryable() && current_retry < max_retries as usize {
+                                    debug!("Retrying request due to: {:?}", error);
+                                    #[cfg(feature = "metrics")]
+                                    self.metrics.record_retry(
+                                        (current_retry + 1) as u32,
+                                        &status.to_string(),
+                                    );
+                                    return Err(backoff::Error::transient(error));
+                                } else {
+                                    return Err(backoff::Error::Permanent(error));
+                                }
+                            }
+
+                            // Non-retryable HTTP errors
+                            if !status.is_success() && status != StatusCode::NOT_MODIFIED {
+                                let error = self.parse_error_response(response).await;
                                 return Err(backoff::Error::Permanent(error));
                             }
-                        }
 
-                        // Non-retryable HTTP errors
-                        if !status.is_success() && status != StatusCode::NOT_MODIFIED {
-                            let error = self.parse_error_response(response).await;
-                            return Err(backoff::Error::Permanent(error));
-                        }
-
-                        // Record successful request metrics
-                        #[cfg(feature = "metrics")]
-                        {
-                            let duration_secs = start_time.elapsed().as_secs_f64();
-                            self.metrics.record_request(&method, &path, status.as_u16(), duration_secs);
-                        }
-
-                        Ok(response)
-                    }
-                    Err(e) => {
-                        let error = Error::from(e);
-                        if error.is_retryable() && current_retry < max_retries as usize {
-                            debug!("Retrying request due to network error: {:?}", error);
+                            // Record successful request metrics
                             #[cfg(feature = "metrics")]
-                            self.metrics.record_retry((current_retry + 1) as u32, "network_error");
-                            Err(backoff::Error::transient(error))
-                        } else {
-                            Err(backoff::Error::Permanent(error))
+                            {
+                                let duration_secs = start_time.elapsed().as_secs_f64();
+                                self.metrics.record_request(
+                                    &method,
+                                    &path,
+                                    status.as_u16(),
+                                    duration_secs,
+                                );
+                            }
+
+                            Ok(response)
+                        }
+                        Err(e) => {
+                            let error = Error::from(e);
+                            if error.is_retryable() && current_retry < max_retries as usize {
+                                debug!("Retrying request due to network error: {:?}", error);
+                                #[cfg(feature = "metrics")]
+                                self.metrics
+                                    .record_retry((current_retry + 1) as u32, "network_error");
+                                Err(backoff::Error::transient(error))
+                            } else {
+                                Err(backoff::Error::Permanent(error))
+                            }
                         }
                     }
-                }
-            }, |err, dur| {
-                let count = retry_count_clone.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-                debug!("Retry {} after {:?} due to: {:?}", count, dur, err);
-            })
+                },
+                |err, dur| {
+                    let count =
+                        retry_count_clone.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                    debug!("Retry {} after {:?} due to: {:?}", count, dur, err);
+                },
+            )
             .await;
 
             match result {
                 Ok(response) => return Ok(response),
-                Err(Error::Http { status: 401, category, .. }) if category == "auth_refresh_needed" && token_refresh_count == 0 => {
+                Err(Error::Http {
+                    status: 401,
+                    category,
+                    ..
+                }) if category == "auth_refresh_needed" && token_refresh_count == 0 => {
                     // Try to refresh token once
                     warn!("Got 401, attempting token refresh");
-                    auth.refresh().await.map_err(|e| {
-                        Error::Config(format!("Token refresh failed: {}", e))
-                    })?;
+                    auth.refresh()
+                        .await
+                        .map_err(|e| Error::Config(format!("Token refresh failed: {}", e)))?;
                     token_refresh_count += 1;
                     // Continue to retry with new token
                     continue;
@@ -932,6 +1541,29 @@ impl Client {
                 Err(e) => return Err(e),
             }
         }
+    }
+
+    /// Execute a request without retry logic (for health checks)
+    async fn execute_without_retry(
+        &self,
+        request_builder: reqwest::RequestBuilder,
+    ) -> Result<Response> {
+        // Get auth header
+        let (auth_header, auth_value) = self
+            .config
+            .auth
+            .get_header()
+            .await
+            .map_err(|e| Error::Config(format!("Failed to get auth header: {}", e)))?;
+
+        // Add auth header
+        let request = request_builder
+            .header(auth_header, auth_value)
+            .build()
+            .map_err(|e| Error::Other(format!("Failed to build request: {}", e)))?;
+
+        // Execute request
+        self.http.execute(request).await.map_err(Error::from)
     }
 
     /// Parse error response from server
@@ -1023,7 +1655,7 @@ impl Client {
     /// Get secret from cache
     async fn get_from_cache(&self, cache_key: &str) -> Option<Secret> {
         let cache = self.cache.as_ref()?;
-        
+
         match cache.get(cache_key).await {
             Some(cached) => {
                 // Check if expired
@@ -1036,14 +1668,14 @@ impl Client {
                 } else {
                     debug!("Cache hit for key: {}", cache_key);
                     self.stats.record_hit();
-                    
+
                     // Record cache hit metric
                     #[cfg(feature = "metrics")]
                     {
                         let (namespace, _) = cache_key.split_once('/').unwrap_or(("", cache_key));
                         self.metrics.record_cache_hit(namespace);
                     }
-                    
+
                     let (namespace, key) = cache_key.split_once('/').unwrap_or(("", cache_key));
                     Some(cached.into_secret(namespace.to_string(), key.to_string()))
                 }
@@ -1051,14 +1683,14 @@ impl Client {
             None => {
                 trace!("Cache miss for key: {}", cache_key);
                 self.stats.record_miss();
-                
+
                 // Record cache miss metric
                 #[cfg(feature = "metrics")]
                 {
                     let (namespace, _) = cache_key.split_once('/').unwrap_or(("", cache_key));
                     self.metrics.record_cache_miss(namespace);
                 }
-                
+
                 None
             }
         }
@@ -1100,8 +1732,8 @@ mod tests {
     use super::*;
     use crate::{auth::Auth, ClientBuilder};
     use secrecy::ExposeSecret;
-    use wiremock::{MockServer, Mock, ResponseTemplate};
-    use wiremock::matchers::{method, path, header};
+    use wiremock::matchers::{header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     // Helper function to create test client that works with HTTP URLs
     fn create_test_client(base_url: &str) -> Client {
@@ -1158,14 +1790,16 @@ mod tests {
                 ResponseTemplate::new(200)
                     .set_body_json(&response_body)
                     .insert_header("etag", "\"abc123\"")
-                    .insert_header("x-request-id", "req-123")
+                    .insert_header("x-request-id", "req-123"),
             )
             .mount(&mock_server)
             .await;
 
         let client = create_test_client(&mock_server.uri());
 
-        let result = client.get_secret("test-namespace", "test-key", GetOpts::default()).await;
+        let result = client
+            .get_secret("test-namespace", "test-key", GetOpts::default())
+            .await;
         if let Err(ref e) = result {
             eprintln!("Error: {:?}", e);
         }
@@ -1194,14 +1828,16 @@ mod tests {
             .respond_with(
                 ResponseTemplate::new(404)
                     .set_body_json(&error_body)
-                    .insert_header("x-request-id", "req-456")
+                    .insert_header("x-request-id", "req-456"),
             )
             .mount(&mock_server)
             .await;
 
         let client = create_test_client(&mock_server.uri());
 
-        let result = client.get_secret("test-namespace", "missing-key", GetOpts::default()).await;
+        let result = client
+            .get_secret("test-namespace", "missing-key", GetOpts::default())
+            .await;
         assert!(result.is_err());
 
         let err = result.unwrap_err();
@@ -1227,20 +1863,20 @@ mod tests {
             .respond_with(
                 ResponseTemplate::new(200)
                     .set_body_json(&response_body)
-                    .insert_header("etag", "\"etag123\"")
+                    .insert_header("etag", "\"etag123\""),
             )
             .expect(1) // Should only be called once
             .mount(&mock_server)
             .await;
 
         #[cfg(feature = "danger-insecure-http")]
-        let client = ClientBuilder::new(&mock_server.uri())
+        let client = ClientBuilder::new(mock_server.uri())
             .auth(Auth::bearer("test-token"))
             .enable_cache(true)
             .allow_insecure_http()
             .build()
             .unwrap();
-        
+
         #[cfg(not(feature = "danger-insecure-http"))]
         let client = ClientBuilder::new(&mock_server.uri().replace("http://", "https://"))
             .auth(Auth::bearer("test-token"))
@@ -1249,14 +1885,20 @@ mod tests {
             .unwrap();
 
         // First request - should hit server
-        let secret1 = client.get_secret("cache-ns", "cache-key", GetOpts::default()).await.unwrap();
+        let secret1 = client
+            .get_secret("cache-ns", "cache-key", GetOpts::default())
+            .await
+            .unwrap();
         assert_eq!(secret1.version, 2);
 
         // Small delay to ensure cache is populated
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
 
         // Second request - should hit cache
-        let secret2 = client.get_secret("cache-ns", "cache-key", GetOpts::default()).await.unwrap();
+        let secret2 = client
+            .get_secret("cache-ns", "cache-key", GetOpts::default())
+            .await
+            .unwrap();
         assert_eq!(secret2.version, 2);
 
         // Verify cache hit
@@ -1295,20 +1937,20 @@ mod tests {
             .respond_with(
                 ResponseTemplate::new(200)
                     .set_body_json(&response_body)
-                    .insert_header("etag", "\"etag-v1\"")
+                    .insert_header("etag", "\"etag-v1\""),
             )
             .expect(1)
             .mount(&mock_server)
             .await;
 
         #[cfg(feature = "danger-insecure-http")]
-        let client = ClientBuilder::new(&mock_server.uri())
+        let client = ClientBuilder::new(mock_server.uri())
             .auth(Auth::bearer("test-token"))
             .enable_cache(true)
             .allow_insecure_http()
             .build()
             .unwrap();
-        
+
         #[cfg(not(feature = "danger-insecure-http"))]
         let client = ClientBuilder::new(&mock_server.uri().replace("http://", "https://"))
             .auth(Auth::bearer("test-token"))
@@ -1317,22 +1959,25 @@ mod tests {
             .unwrap();
 
         // First request
-        let secret1 = client.get_secret("test-ns", "test-key", GetOpts::default()).await.unwrap();
+        let secret1 = client
+            .get_secret("test-ns", "test-key", GetOpts::default())
+            .await
+            .unwrap();
         assert_eq!(secret1.etag, Some("\"etag-v1\"".to_string()));
 
         // Clear cache to force second request to hit server
         client.clear_cache();
-        
+
         // Second request with etag
         let opts = GetOpts {
-            use_cache: false,  // Disable cache to ensure we hit the server
-            if_none_match: Some("etag-v1".to_string()),  // Without quotes
+            use_cache: false, // Disable cache to ensure we hit the server
+            if_none_match: Some("etag-v1".to_string()), // Without quotes
             if_modified_since: None,
         };
         // This should return error since cache was cleared and server returns 304
         let result = client.get_secret("test-ns", "test-key", opts).await;
         assert!(result.is_err());
-        
+
         // The error should indicate that we got 304 but have no cache
         if let Err(e) = result {
             match &e {
@@ -1359,10 +2004,7 @@ mod tests {
 
         Mock::given(method("PUT"))
             .and(path("/api/v2/secrets/test-ns/new-key"))
-            .respond_with(
-                ResponseTemplate::new(201)
-                    .set_body_json(&response_body)
-            )
+            .respond_with(ResponseTemplate::new(201).set_body_json(&response_body))
             .mount(&mock_server)
             .await;
 
@@ -1374,7 +2016,9 @@ mod tests {
             idempotency_key: None,
         };
 
-        let result = client.put_secret("test-ns", "new-key", "new-value", opts).await;
+        let result = client
+            .put_secret("test-ns", "new-key", "new-value", opts)
+            .await;
         assert!(result.is_ok());
 
         let put_result = result.unwrap();
@@ -1388,10 +2032,7 @@ mod tests {
 
         Mock::given(method("DELETE"))
             .and(path("/api/v2/secrets/test-ns/delete-key"))
-            .respond_with(
-                ResponseTemplate::new(204)
-                    .insert_header("x-request-id", "req-delete")
-            )
+            .respond_with(ResponseTemplate::new(204).insert_header("x-request-id", "req-delete"))
             .mount(&mock_server)
             .await;
 
@@ -1419,10 +2060,7 @@ mod tests {
         // First two requests fail, third succeeds
         Mock::given(method("GET"))
             .and(path("/api/v2/secrets/test-ns/retry-key"))
-            .respond_with(
-                ResponseTemplate::new(500)
-                    .set_body_json(&error_body)
-            )
+            .respond_with(ResponseTemplate::new(500).set_body_json(&error_body))
             .up_to_n_times(2)
             .mount(&mock_server)
             .await;
@@ -1437,21 +2075,18 @@ mod tests {
 
         Mock::given(method("GET"))
             .and(path("/api/v2/secrets/test-ns/retry-key"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(&success_body)
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(&success_body))
             .mount(&mock_server)
             .await;
 
         #[cfg(feature = "danger-insecure-http")]
-        let client = ClientBuilder::new(&mock_server.uri())
+        let client = ClientBuilder::new(mock_server.uri())
             .auth(Auth::bearer("test-token"))
             .retries(3)
             .allow_insecure_http()
             .build()
             .unwrap();
-        
+
         #[cfg(not(feature = "danger-insecure-http"))]
         let client = ClientBuilder::new(&mock_server.uri().replace("http://", "https://"))
             .auth(Auth::bearer("test-token"))
@@ -1459,7 +2094,9 @@ mod tests {
             .build()
             .unwrap();
 
-        let result = client.get_secret("test-ns", "retry-key", GetOpts::default()).await;
+        let result = client
+            .get_secret("test-ns", "retry-key", GetOpts::default())
+            .await;
         assert!(result.is_ok()); // Should succeed after retries
     }
 
@@ -1483,10 +2120,7 @@ mod tests {
             .and(path("/api/v2/secrets/test-ns"))
             .and(wiremock::matchers::query_param("prefix", "key"))
             .and(wiremock::matchers::query_param("limit", "10"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(&response_body)
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(&response_body))
             .mount(&mock_server)
             .await;
 
@@ -1539,10 +2173,7 @@ mod tests {
 
         Mock::given(method("GET"))
             .and(path("/api/v2/secrets/test-ns/versioned-key/versions"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(&response_body)
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(&response_body))
             .mount(&mock_server)
             .await;
 
@@ -1576,7 +2207,7 @@ mod tests {
             .respond_with(
                 ResponseTemplate::new(200)
                     .set_body_json(&response_body)
-                    .insert_header("etag", "\"etag-v2\"")
+                    .insert_header("etag", "\"etag-v2\""),
             )
             .mount(&mock_server)
             .await;
@@ -1608,10 +2239,7 @@ mod tests {
 
         Mock::given(method("POST"))
             .and(path("/api/v2/secrets/test-ns/versioned-key/rollback/2"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(&response_body)
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(&response_body))
             .mount(&mock_server)
             .await;
 
@@ -1649,7 +2277,7 @@ mod tests {
                     "timestamp": "2024-01-01T12:05:00Z",
                     "actor": "user2",
                     "action": "get",
-                    "namespace": "production", 
+                    "namespace": "production",
                     "key_name": "db-pass",
                     "success": false,
                     "error": "not found"
@@ -1664,10 +2292,7 @@ mod tests {
 
         Mock::given(method("GET"))
             .and(path("/api/v2/audit"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(&response_body)
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(&response_body))
             .mount(&mock_server)
             .await;
 
@@ -1681,7 +2306,7 @@ mod tests {
         assert_eq!(audit_result.entries.len(), 2);
         assert_eq!(audit_result.total, 2);
         assert!(!audit_result.has_more);
-        
+
         // Check first entry
         let first = &audit_result.entries[0];
         assert_eq!(first.id, 123);
@@ -1719,10 +2344,7 @@ mod tests {
             .and(wiremock::matchers::query_param("namespace", "test"))
             .and(wiremock::matchers::query_param("success", "false"))
             .and(wiremock::matchers::query_param("limit", "5"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(&response_body)
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(&response_body))
             .mount(&mock_server)
             .await;
 
@@ -1734,7 +2356,7 @@ mod tests {
             limit: Some(5),
             ..Default::default()
         };
-        
+
         let result = client.audit(query).await;
         assert!(result.is_ok());
 
@@ -1742,6 +2364,9 @@ mod tests {
         assert_eq!(audit_result.entries.len(), 1);
         assert_eq!(audit_result.entries[0].action, "delete");
         assert!(!audit_result.entries[0].success);
-        assert_eq!(audit_result.entries[0].error, Some("permission denied".to_string()));
+        assert_eq!(
+            audit_result.entries[0].error,
+            Some("permission denied".to_string())
+        );
     }
 }

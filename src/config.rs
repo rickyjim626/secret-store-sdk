@@ -1,4 +1,4 @@
-use crate::{auth::Auth, cache::CacheConfig, errors::Result, Error, telemetry::TelemetryConfig};
+use crate::{auth::Auth, cache::CacheConfig, errors::Result, telemetry::TelemetryConfig, Error};
 use std::time::Duration;
 
 /// Client configuration
@@ -125,14 +125,14 @@ impl ClientBuilder {
     pub fn build(self) -> Result<crate::Client> {
         // Validate base URL
         let url = self.base_url.trim_end_matches('/');
-        
+
         // Check for insecure HTTP
         if url.starts_with("http://") && !self.allow_insecure_http {
             #[cfg(feature = "danger-insecure-http")]
             return Err(Error::Config(
                 "HTTP URLs are not allowed by default. Use .allow_insecure_http() to enable (dangerous!)".to_string()
             ));
-            
+
             #[cfg(not(feature = "danger-insecure-http"))]
             return Err(Error::Config(
                 "HTTP URLs are not allowed. Enable the 'danger-insecure-http' feature and use .allow_insecure_http() (dangerous!)".to_string()
@@ -141,12 +141,16 @@ impl ClientBuilder {
 
         // Require authentication
         let auth = self.auth.ok_or_else(|| {
-            Error::Config("Authentication is required. Use .auth() to set authentication method".to_string())
+            Error::Config(
+                "Authentication is required. Use .auth() to set authentication method".to_string(),
+            )
         })?;
 
         // Validate URL format
         if !url.starts_with("http://") && !url.starts_with("https://") {
-            return Err(Error::Config("Base URL must start with http:// or https://".to_string()));
+            return Err(Error::Config(
+                "Base URL must start with http:// or https://".to_string(),
+            ));
         }
 
         let config = ClientConfig {

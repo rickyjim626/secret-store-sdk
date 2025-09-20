@@ -24,36 +24,36 @@ fn main() {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     use secret_store_sdk::telemetry::TelemetryConfig;
-    
+
     // Initialize tracing
     tracing_subscriber::fmt::init();
-    
+
     #[cfg(feature = "metrics")]
     {
         // Initialize simple Prometheus registry
         println!("Initializing metrics...");
-        
+
         let api_key = std::env::var("XJP_API_KEY")?;
         let base_url = std::env::var("XJP_BASE_URL")?;
-        
+
         // Create telemetry config
         let telemetry_config = TelemetryConfig {
             enabled: true,
             service_name: "xjp-secret-store-example".to_string(),
             service_version: "0.1.0".to_string(),
         };
-        
+
         // Create client with telemetry enabled
         let client = ClientBuilder::new(&base_url)
             .auth(Auth::api_key(api_key))
             .with_telemetry(telemetry_config)
             .enable_cache(true)
             .build()?;
-        
+
         println!("Performing operations to generate metrics...\n");
-        
+
         // Perform various operations to generate metrics
-        
+
         // 1. Successful requests
         println!("1. Making successful requests:");
         for i in 0..5 {
@@ -63,17 +63,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Err(_) => println!("   ✗ Failed to get: test/{}", key),
             }
         }
-        
+
         // 2. Cache hits
         println!("\n2. Testing cache (should generate cache hits):");
-        let _ = client.get_secret("test", "cached-key", GetOpts::default()).await;
+        let _ = client
+            .get_secret("test", "cached-key", GetOpts::default())
+            .await;
         for _ in 0..3 {
-            match client.get_secret("test", "cached-key", GetOpts::default()).await {
+            match client
+                .get_secret("test", "cached-key", GetOpts::default())
+                .await
+            {
                 Ok(_) => println!("   ✓ Cache hit for test/cached-key"),
                 Err(_) => println!("   ✗ Cache miss"),
             }
         }
-        
+
         // 3. Force cache misses
         println!("\n3. Testing cache misses:");
         for i in 0..3 {
@@ -87,17 +92,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Err(_) => println!("   ✗ Failed: test/{}", key),
             }
         }
-        
+
         // 4. Generate some errors
         println!("\n4. Testing error scenarios:");
         for i in 0..3 {
             let key = format!("error-test-{}", i);
-            match client.get_secret("invalid-namespace!", &key, GetOpts::default()).await {
+            match client
+                .get_secret("invalid-namespace!", &key, GetOpts::default())
+                .await
+            {
                 Ok(_) => println!("   ✓ Unexpected success"),
                 Err(e) => println!("   ✗ Expected error: {}", e),
             }
         }
-        
+
         println!("\n5. Metrics Summary:");
         println!("   Note: OpenTelemetry metrics are collected internally.");
         println!("   To export metrics, integrate with a metrics backend like Prometheus.");
@@ -107,16 +115,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("   - Cache hits/misses");
         println!("   - Active connections");
         println!("   - Retry attempts");
-        
+
         // Get cache statistics
         let cache_stats = client.cache_stats();
         println!("\n6. Cache Statistics:");
         println!("   Hits: {}", cache_stats.hits());
         println!("   Misses: {}", cache_stats.misses());
         println!("   Hit rate: {:.2}%", cache_stats.hit_rate() * 100.0);
-        
+
         println!("\nExample completed successfully!");
     }
-    
+
     Ok(())
 }

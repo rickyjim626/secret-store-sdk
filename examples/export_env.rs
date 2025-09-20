@@ -1,6 +1,8 @@
 //! Environment export example for XJP Secret Store SDK
 
-use secret_store_sdk::{Auth, Client, ClientBuilder, EnvExport, ExportFormat, PutOpts};
+use secret_store_sdk::{
+    Auth, Client, ClientBuilder, EnvExport, ExportEnvOpts, ExportFormat, PutOpts,
+};
 use std::collections::HashMap;
 
 #[tokio::main]
@@ -37,8 +39,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 fn create_client() -> Result<Client, Box<dyn std::error::Error>> {
     let base_url = std::env::var("XJP_SECRET_STORE_URL")
         .unwrap_or_else(|_| "https://secret.example.com".to_string());
-    let api_key = std::env::var("XJP_SECRET_STORE_API_KEY")
-        .unwrap_or_else(|_| "demo-api-key".to_string());
+    let api_key =
+        std::env::var("XJP_SECRET_STORE_API_KEY").unwrap_or_else(|_| "demo-api-key".to_string());
 
     let client = ClientBuilder::new(base_url)
         .auth(Auth::bearer(api_key))
@@ -50,11 +52,19 @@ fn create_client() -> Result<Client, Box<dyn std::error::Error>> {
 
 async fn setup_env_secrets(client: &Client) -> Result<(), Box<dyn std::error::Error>> {
     let namespace = "env-example";
-    
+
     // Create typical environment variables
     let env_vars = vec![
-        ("DATABASE_URL", "postgresql://user:pass@localhost:5432/myapp", "Database connection string"),
-        ("REDIS_URL", "redis://localhost:6379", "Redis connection string"),
+        (
+            "DATABASE_URL",
+            "postgresql://user:pass@localhost:5432/myapp",
+            "Database connection string",
+        ),
+        (
+            "REDIS_URL",
+            "redis://localhost:6379",
+            "Redis connection string",
+        ),
         ("API_KEY", "sk_live_abcdef123456", "External API key"),
         ("LOG_LEVEL", "info", "Application log level"),
         ("PORT", "8080", "Server port"),
@@ -74,7 +84,7 @@ async fn setup_env_secrets(client: &Client) -> Result<(), Box<dyn std::error::Er
             })),
             ..Default::default()
         };
-        
+
         client.put_secret(namespace, key, value, opts).await?;
     }
 
@@ -96,19 +106,27 @@ fn categorize_env_var(key: &str) -> &'static str {
 
 async fn export_json_example(client: &Client) -> Result<(), Box<dyn std::error::Error>> {
     let namespace = "env-example";
-    
-    let export = client.export_env(namespace, ExportFormat::Json).await?;
-    
+
+    let export = client
+        .export_env(
+            namespace,
+            ExportEnvOpts {
+                format: ExportFormat::Json,
+                ..Default::default()
+            },
+        )
+        .await?;
+
     if let EnvExport::Json(json_export) = export {
         println!("Namespace: {}", json_export.namespace);
         println!("Total variables: {}", json_export.total);
         println!("ETag: {}", json_export.etag);
         println!("\nEnvironment variables:");
-        
+
         // Sort for consistent output
         let mut sorted: Vec<_> = json_export.environment.into_iter().collect();
         sorted.sort_by(|a, b| a.0.cmp(&b.0));
-        
+
         for (key, value) in sorted.iter() {
             // Mask sensitive values
             let display_value = if key.contains("KEY") || key.contains("PASSWORD") {
@@ -132,9 +150,17 @@ async fn export_json_example(client: &Client) -> Result<(), Box<dyn std::error::
 
 async fn export_dotenv_example(client: &Client) -> Result<(), Box<dyn std::error::Error>> {
     let namespace = "env-example";
-    
-    let export = client.export_env(namespace, ExportFormat::Dotenv).await?;
-    
+
+    let export = client
+        .export_env(
+            namespace,
+            ExportEnvOpts {
+                format: ExportFormat::Dotenv,
+                ..Default::default()
+            },
+        )
+        .await?;
+
     if let EnvExport::Text(dotenv_content) = export {
         println!("Generated .env file:");
         println!("---");
@@ -144,10 +170,13 @@ async fn export_dotenv_example(client: &Client) -> Result<(), Box<dyn std::error
         }
         println!("...");
         println!("---");
-        
+
         // Save to file (in real app)
         // std::fs::write(".env.production", &dotenv_content)?;
-        println!("\n(Would save {} bytes to .env.production)", dotenv_content.len());
+        println!(
+            "\n(Would save {} bytes to .env.production)",
+            dotenv_content.len()
+        );
     }
 
     Ok(())
@@ -155,9 +184,17 @@ async fn export_dotenv_example(client: &Client) -> Result<(), Box<dyn std::error
 
 async fn export_shell_example(client: &Client) -> Result<(), Box<dyn std::error::Error>> {
     let namespace = "env-example";
-    
-    let export = client.export_env(namespace, ExportFormat::Shell).await?;
-    
+
+    let export = client
+        .export_env(
+            namespace,
+            ExportEnvOpts {
+                format: ExportFormat::Shell,
+                ..Default::default()
+            },
+        )
+        .await?;
+
     if let EnvExport::Text(shell_script) = export {
         println!("Generated shell script:");
         println!("---");
@@ -171,7 +208,7 @@ async fn export_shell_example(client: &Client) -> Result<(), Box<dyn std::error:
         }
         println!("...");
         println!("---");
-        
+
         // Could be used as: source env.sh
         println!("\n(Would save as env.sh for sourcing)");
     }
@@ -181,9 +218,17 @@ async fn export_shell_example(client: &Client) -> Result<(), Box<dyn std::error:
 
 async fn export_docker_compose_example(client: &Client) -> Result<(), Box<dyn std::error::Error>> {
     let namespace = "env-example";
-    
-    let export = client.export_env(namespace, ExportFormat::DockerCompose).await?;
-    
+
+    let export = client
+        .export_env(
+            namespace,
+            ExportEnvOpts {
+                format: ExportFormat::DockerCompose,
+                ..Default::default()
+            },
+        )
+        .await?;
+
     if let EnvExport::Text(docker_compose) = export {
         println!("Docker Compose environment section:");
         println!("---");
@@ -193,7 +238,7 @@ async fn export_docker_compose_example(client: &Client) -> Result<(), Box<dyn st
         }
         println!("...");
         println!("---");
-        
+
         // Could be included in docker-compose.yml
         println!("\n(Would include in docker-compose.yml under 'environment:')");
     }
@@ -203,20 +248,39 @@ async fn export_docker_compose_example(client: &Client) -> Result<(), Box<dyn st
 
 async fn use_exports_example(client: &Client) -> Result<(), Box<dyn std::error::Error>> {
     let namespace = "env-example";
-    
+
     // Get environment for different deployment scenarios
-    
+
     // 1. Local development - write .env file
     println!("Setting up local development environment...");
-    let local_env = client.export_env(namespace, ExportFormat::Dotenv).await?;
+    let local_env = client
+        .export_env(
+            namespace,
+            ExportEnvOpts {
+                format: ExportFormat::Dotenv,
+                ..Default::default()
+            },
+        )
+        .await?;
     if let EnvExport::Text(content) = local_env {
         // In real app: std::fs::write(".env.local", content)?;
-        println!("  Would create .env.local with {} variables", content.lines().count());
+        println!(
+            "  Would create .env.local with {} variables",
+            content.lines().count()
+        );
     }
 
     // 2. CI/CD - export as shell
     println!("\nPreparing CI/CD environment...");
-    let ci_env = client.export_env(namespace, ExportFormat::Shell).await?;
+    let ci_env = client
+        .export_env(
+            namespace,
+            ExportEnvOpts {
+                format: ExportFormat::Shell,
+                ..Default::default()
+            },
+        )
+        .await?;
     if let EnvExport::Text(_script) = ci_env {
         // In CI: Execute script to set environment
         println!("  Would execute shell script to set environment");
@@ -224,16 +288,28 @@ async fn use_exports_example(client: &Client) -> Result<(), Box<dyn std::error::
 
     // 3. Container deployment - get as JSON for programmatic use
     println!("\nConfiguring container deployment...");
-    let container_env = client.export_env(namespace, ExportFormat::Json).await?;
+    let container_env = client
+        .export_env(
+            namespace,
+            ExportEnvOpts {
+                format: ExportFormat::Json,
+                ..Default::default()
+            },
+        )
+        .await?;
     if let EnvExport::Json(json) = container_env {
         // Build container environment
-        let env_list: Vec<String> = json.environment
+        let env_list: Vec<String> = json
+            .environment
             .into_iter()
             .map(|(k, v)| format!("{}={}", k, v))
             .collect();
-        
-        println!("  Would pass {} environment variables to container", env_list.len());
-        
+
+        println!(
+            "  Would pass {} environment variables to container",
+            env_list.len()
+        );
+
         // Example: docker run -e VAR1=val1 -e VAR2=val2 ...
         // Or kubernetes ConfigMap/Secret
     }
@@ -252,10 +328,11 @@ struct AppConfig {
 fn parse_config(env: HashMap<String, String>) -> AppConfig {
     AppConfig {
         database_url: env.get("DATABASE_URL").cloned().unwrap_or_default(),
-        port: env.get("PORT")
-            .and_then(|p| p.parse().ok())
-            .unwrap_or(8080),
-        log_level: env.get("LOG_LEVEL").cloned().unwrap_or_else(|| "info".to_string()),
+        port: env.get("PORT").and_then(|p| p.parse().ok()).unwrap_or(8080),
+        log_level: env
+            .get("LOG_LEVEL")
+            .cloned()
+            .unwrap_or_else(|| "info".to_string()),
     }
 }
 

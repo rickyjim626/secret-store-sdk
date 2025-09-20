@@ -117,9 +117,13 @@ impl Auth {
     }
 
     /// Get the authorization header name and value
-    pub(crate) async fn get_header(&self) -> Result<(&'static str, String), Box<dyn std::error::Error + Send + Sync>> {
+    pub(crate) async fn get_header(
+        &self,
+    ) -> Result<(&'static str, String), Box<dyn std::error::Error + Send + Sync>> {
         match self {
-            Auth::Bearer(token) => Ok(("Authorization", format!("Bearer {}", token.expose_secret()))),
+            Auth::Bearer(token) => {
+                Ok(("Authorization", format!("Bearer {}", token.expose_secret())))
+            }
             Auth::ApiKey(key) => Ok(("X-API-Key", key.expose_secret().clone())),
             Auth::XjpKey(key) => Ok(("XJP-KEY", key.expose_secret().clone())),
             Auth::TokenProvider(provider) => {
@@ -288,7 +292,7 @@ mod tests {
         assert!(!Auth::bearer("token").supports_refresh());
         assert!(!Auth::api_key("key").supports_refresh());
         assert!(!Auth::xjp_key("key").supports_refresh());
-        
+
         let provider = Auth::token_provider(StaticTokenProvider::new("token"));
         assert!(provider.supports_refresh());
     }

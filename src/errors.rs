@@ -205,7 +205,10 @@ mod tests {
     #[test]
     fn test_error_kind_from_category() {
         assert_eq!(ErrorKind::from_category("auth"), ErrorKind::Auth);
-        assert_eq!(ErrorKind::from_category("validation"), ErrorKind::Validation);
+        assert_eq!(
+            ErrorKind::from_category("validation"),
+            ErrorKind::Validation
+        );
         assert_eq!(ErrorKind::from_category("not_found"), ErrorKind::NotFound);
         assert_eq!(ErrorKind::from_category("unknown"), ErrorKind::Other);
     }

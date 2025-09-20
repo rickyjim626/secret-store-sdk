@@ -31,8 +31,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 fn create_client() -> Result<Client, Box<dyn std::error::Error>> {
     let base_url = std::env::var("XJP_SECRET_STORE_URL")
         .unwrap_or_else(|_| "https://secret.example.com".to_string());
-    let api_key = std::env::var("XJP_SECRET_STORE_API_KEY")
-        .unwrap_or_else(|_| "demo-api-key".to_string());
+    let api_key =
+        std::env::var("XJP_SECRET_STORE_API_KEY").unwrap_or_else(|_| "demo-api-key".to_string());
 
     let client = ClientBuilder::new(base_url)
         .auth(Auth::bearer(api_key))
@@ -45,7 +45,7 @@ fn create_client() -> Result<Client, Box<dyn std::error::Error>> {
 async fn batch_get_keys_example(client: &Client) -> Result<(), Box<dyn std::error::Error>> {
     // First, create some secrets to fetch
     let namespace = "batch-example";
-    
+
     for i in 1..=5 {
         client
             .put_secret(
@@ -85,13 +85,13 @@ async fn batch_get_all_example(client: &Client) -> Result<(), Box<dyn std::error
     let namespace = "batch-example";
 
     // Get all secrets in different formats
-    
+
     // 1. As JSON
     println!("\nAll secrets as JSON:");
     let result = client
         .batch_get(namespace, BatchKeys::All, ExportFormat::Json)
         .await?;
-    
+
     if let BatchGetResult::Json(json) = result {
         println!("Total secrets: {}", json.total);
     }
@@ -101,7 +101,7 @@ async fn batch_get_all_example(client: &Client) -> Result<(), Box<dyn std::error
     let result = client
         .batch_get(namespace, BatchKeys::All, ExportFormat::Dotenv)
         .await?;
-    
+
     if let BatchGetResult::Text(dotenv) = result {
         println!("{}", dotenv);
         // Could write to file: std::fs::write(".env", dotenv)?;
@@ -112,7 +112,7 @@ async fn batch_get_all_example(client: &Client) -> Result<(), Box<dyn std::error
     let result = client
         .batch_get(namespace, BatchKeys::All, ExportFormat::Shell)
         .await?;
-    
+
     if let BatchGetResult::Text(shell) = result {
         // First few lines only
         for line in shell.lines().take(3) {
@@ -135,10 +135,8 @@ async fn batch_operations_example(client: &Client) -> Result<(), Box<dyn std::er
             .with_metadata(serde_json::json!({"service": "postgres"})),
         BatchOp::put("db-port", "5432"),
         BatchOp::put("db-name", "myapp"),
-        
         // Update existing secret
         BatchOp::put("api-version", "v2"),
-        
         // Delete old secrets
         BatchOp::delete("deprecated-key-1"),
         BatchOp::delete("deprecated-key-2"),
@@ -147,7 +145,7 @@ async fn batch_operations_example(client: &Client) -> Result<(), Box<dyn std::er
     // Execute non-transactional (partial success allowed)
     let result = client
         .batch_operate(
-            namespace, 
+            namespace,
             operations,
             false, // non-transactional
             Some("batch-example-001".to_string()),
@@ -164,7 +162,7 @@ async fn batch_operations_example(client: &Client) -> Result<(), Box<dyn std::er
     for op in &result.results.succeeded {
         println!("  ✓ {} {}", op.action, op.key);
     }
-    
+
     // Show failed operations
     for op in &result.results.failed {
         println!("  ✗ {} {}: {:?}", op.action, op.key, op.error);
@@ -198,7 +196,10 @@ async fn transactional_batch_example(client: &Client) -> Result<(), Box<dyn std:
     {
         Ok(result) => {
             println!("Transaction succeeded!");
-            println!("All {} operations completed", result.results.succeeded.len());
+            println!(
+                "All {} operations completed",
+                result.results.succeeded.len()
+            );
         }
         Err(e) => {
             println!("Transaction failed: {}", e);
@@ -208,7 +209,7 @@ async fn transactional_batch_example(client: &Client) -> Result<(), Box<dyn std:
 
     // Retry without the potentially failing operation
     println!("\nRetrying without the delete operation...");
-    
+
     let safe_operations = vec![
         BatchOp::put("transaction-1", "value1"),
         BatchOp::put("transaction-2", "value2"),
@@ -224,7 +225,10 @@ async fn transactional_batch_example(client: &Client) -> Result<(), Box<dyn std:
         )
         .await?;
 
-    println!("Transaction succeeded with {} operations", result.results.succeeded.len());
+    println!(
+        "Transaction succeeded with {} operations",
+        result.results.succeeded.len()
+    );
 
     Ok(())
 }
@@ -245,15 +249,12 @@ async fn complex_batch_example(client: &Client) -> Result<(), Box<dyn std::error
         for env in &environments {
             let key = format!("{}-{}-endpoint", service, env);
             let value = format!("https://{}-{}.example.com", service, env);
-            
-            operations.push(
-                BatchOp::put(&key, &value)
-                    .with_metadata(serde_json::json!({
-                        "service": service,
-                        "environment": env,
-                        "managed_by": "terraform"
-                    }))
-            );
+
+            operations.push(BatchOp::put(&key, &value).with_metadata(serde_json::json!({
+                "service": service,
+                "environment": env,
+                "managed_by": "terraform"
+            })));
         }
     }
 
@@ -261,10 +262,10 @@ async fn complex_batch_example(client: &Client) -> Result<(), Box<dyn std::error
     for i in 1..=3 {
         operations.push(
             BatchOp::put(
-                &format!("temp-db-password-{}", i),
-                &format!("temp-pass-{}", uuid::Uuid::new_v4()),
+                format!("temp-db-password-{}", i),
+                format!("temp-pass-{}", uuid::Uuid::new_v4()),
             )
-            .with_ttl(86400) // 24 hours
+            .with_ttl(86400), // 24 hours
         );
     }
 
@@ -273,7 +274,10 @@ async fn complex_batch_example(client: &Client) -> Result<(), Box<dyn std::error
         .batch_operate(namespace, operations, false, None)
         .await?;
 
-    println!("Created {} configuration entries", result.results.succeeded.len());
+    println!(
+        "Created {} configuration entries",
+        result.results.succeeded.len()
+    );
 
     Ok(())
 }

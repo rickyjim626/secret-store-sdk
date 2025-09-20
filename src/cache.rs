@@ -130,19 +130,19 @@ impl CachedSecret {
     /// Check if the cache entry has expired
     pub fn is_expired(&self) -> bool {
         let now = time::OffsetDateTime::now_utc();
-        
+
         // Check cache expiry
         if now >= self.cache_expires_at {
             return true;
         }
-        
+
         // Check secret expiry
         if let Some(expires_at) = self.expires_at {
             if now >= expires_at {
                 return true;
             }
         }
-        
+
         false
     }
 
@@ -178,21 +178,21 @@ mod tests {
     #[test]
     fn test_cache_stats() {
         let stats = CacheStats::new();
-        
+
         // Initial state
         assert_eq!(stats.hits(), 0);
         assert_eq!(stats.misses(), 0);
         assert_eq!(stats.hit_rate(), 0.0);
-        
+
         // Record some activity
         stats.record_hit();
         stats.record_hit();
         stats.record_miss();
-        
+
         assert_eq!(stats.hits(), 2);
         assert_eq!(stats.misses(), 1);
         assert_eq!(stats.hit_rate(), 66.66666666666666);
-        
+
         // Reset
         stats.reset();
         assert_eq!(stats.hits(), 0);
@@ -202,9 +202,9 @@ mod tests {
     #[test]
     fn test_cached_secret_expiry() {
         use time::Duration;
-        
+
         let now = time::OffsetDateTime::now_utc();
-        
+
         // Not expired
         let cached = CachedSecret {
             value: secrecy::SecretString::new("value".to_string()),
@@ -217,7 +217,7 @@ mod tests {
             cache_expires_at: now + Duration::minutes(5),
         };
         assert!(!cached.is_expired());
-        
+
         // Cache expired
         let cached = CachedSecret {
             value: secrecy::SecretString::new("value".to_string()),
@@ -230,7 +230,7 @@ mod tests {
             cache_expires_at: now - Duration::minutes(1),
         };
         assert!(cached.is_expired());
-        
+
         // Secret expired
         let cached = CachedSecret {
             value: secrecy::SecretString::new("value".to_string()),

@@ -34,8 +34,8 @@ fn create_client() -> Result<Client, Box<dyn std::error::Error>> {
     // Get configuration from environment
     let base_url = std::env::var("XJP_SECRET_STORE_URL")
         .unwrap_or_else(|_| "https://secret.example.com".to_string());
-    let api_key = std::env::var("XJP_SECRET_STORE_API_KEY")
-        .unwrap_or_else(|_| "demo-api-key".to_string());
+    let api_key =
+        std::env::var("XJP_SECRET_STORE_API_KEY").unwrap_or_else(|_| "demo-api-key".to_string());
 
     let client = ClientBuilder::new(base_url)
         .auth(Auth::bearer(api_key))
@@ -117,7 +117,10 @@ async fn list_secrets_example(client: &Client) -> Result<(), Box<dyn std::error:
 
     println!("Total secrets in namespace: {}", list.total);
     for secret_info in &list.secrets {
-        println!("  - {} (v{}, updated: {})", secret_info.key, secret_info.version, secret_info.updated_at);
+        println!(
+            "  - {} (v{}, updated: {})",
+            secret_info.key, secret_info.version, secret_info.updated_at
+        );
     }
 
     // List with prefix
@@ -187,7 +190,9 @@ async fn cache_example(client: &Client) -> Result<(), Box<dyn std::error::Error>
     println!("  Insertions: {}", stats.insertions());
 
     // Invalidate specific entry
-    client.invalidate_cache("example-namespace", "database-url").await;
+    client
+        .invalidate_cache("example-namespace", "database-url")
+        .await;
     println!("\nInvalidated cache entry");
 
     Ok(())
