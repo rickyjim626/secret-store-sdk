@@ -547,7 +547,7 @@ impl Client {
 
         // Add idempotency key if provided
         if let Some(key) = idempotency_key {
-            request = request.header("Idempotency-Key", key);
+            request = request.header("X-Idempotency-Key", key);
         }
 
         // Execute with retry
@@ -631,9 +631,10 @@ impl Client {
             return Err(self.parse_error_response(response).await);
         }
 
-        // TODO: Implement caching if opts.use_cache is true
-        // Cache key could be: namespace/env/{format}
-        // Would need to extract ETag from response headers
+        // NOTE: opts.use_cache is currently not implemented.
+        // Future implementation will cache responses with namespace/env/{format} as key
+        // and use ETag headers for cache validation (304 responses).
+        // For now, this flag has no effect.
 
         // Parse response based on format
         match opts.format {
@@ -1368,10 +1369,14 @@ impl Client {
         #[cfg(feature = "metrics")]
         let (method, path) = {
             // Try to build a request to extract metadata
-            if let Ok(req) = request_builder.try_clone().unwrap().build() {
-                let method = req.method().to_string();
-                let path = req.url().path().to_string();
-                (method, path)
+            if let Some(cloned_builder) = request_builder.try_clone() {
+                if let Ok(req) = cloned_builder.build() {
+                    let method = req.method().to_string();
+                    let path = req.url().path().to_string();
+                    (method, path)
+                } else {
+                    ("UNKNOWN".to_string(), "UNKNOWN".to_string())
+                }
             } else {
                 ("UNKNOWN".to_string(), "UNKNOWN".to_string())
             }
@@ -1399,8 +1404,12 @@ impl Client {
                 max_elapsed_time: None,
                 ..Default::default()
             };
+            // Calculate max elapsed time based on timeout and retries
+            // Allow enough time for all retries with their respective timeouts
             backoff.max_elapsed_time = if max_retries > 0 {
-                Some(Duration::from_secs(60))
+                let timeout_secs = self.config.timeout.as_secs();
+                // Allow time for all retries plus some buffer for backoff delays
+                Some(Duration::from_secs((max_retries as u64 + 1) * timeout_secs + 30))
             } else {
                 Some(Duration::from_millis(0))
             };
@@ -1533,7 +1542,7 @@ impl Client {
                     warn!("Got 401, attempting token refresh");
                     auth.refresh()
                         .await
-                        .map_err(|e| Error::Config(format!("Token refresh failed: {}", e)))?;
+                        .map_err(|e| Error::Network(format!("Token refresh failed: {}", e)))?;
                     token_refresh_count += 1;
                     // Continue to retry with new token
                     continue;

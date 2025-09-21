@@ -72,8 +72,7 @@ pub struct Secret {
 pub struct SecretKeyInfo {
     /// Key name
     pub key: String,
-    /// Version number (mapped from "ver" in API)
-    #[serde(rename = "ver")]
+    /// Version number (from API)
     pub version: i32,
     /// Last update time
     pub updated_at: String,
@@ -201,12 +200,15 @@ pub struct ListSecretsResult {
     pub secrets: Vec<SecretKeyInfo>,
     /// Total count
     pub total: usize,
-    /// Limit used
+    /// Limit used (optional in response)
+    #[serde(default)]
     pub limit: usize,
-    /// Whether there are more results
+    /// Whether there are more results (optional in response)
+    #[serde(default)]
     pub has_more: bool,
-    /// Request ID
-    pub request_id: String,
+    /// Request ID (optional in response)
+    #[serde(default)]
+    pub request_id: Option<String>,
 }
 
 /// Export format for batch operations
@@ -375,7 +377,7 @@ pub enum EnvExport {
 pub struct ExportEnvOpts {
     /// Export format
     pub format: ExportFormat,
-    /// Enable caching for this request
+    /// Enable caching for this request (currently not implemented, reserved for future use)
     pub use_cache: bool,
     /// If-None-Match header value for conditional requests
     pub if_none_match: Option<String>,
