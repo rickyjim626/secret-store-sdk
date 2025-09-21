@@ -7,7 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.0] - 2024-01-20
+## [0.1.1] - 2025-01-21
+
+### Fixed
+- **Breaking idempotency bug**: Fixed header inconsistency where `batch_operate` used `Idempotency-Key` while all other methods used `X-Idempotency-Key`. This prevented batch operations from being properly idempotent.
+- **Potential panic**: Fixed unwrap on `try_clone()` in retry logic that could cause panics with non-cloneable request bodies.
+- **Retry timeout**: Fixed hardcoded 60-second retry timeout that ignored configured timeout and retry values. Now calculates dynamically based on `(retries + 1) * timeout + 30s buffer`.
+- **Error classification**: Token refresh failures are now correctly mapped to `Error::Network` instead of `Error::Config` to properly indicate transient network issues rather than configuration problems.
+- **Documentation**: Documented that `ExportEnvOpts::use_cache` is currently unimplemented and reserved for future use.
+
+### Changed
+- Improved error handling robustness in retry mechanism
+- Better timeout calculation for retry backoff strategy
+
+## [0.1.0] - 2025-01-20
 
 ### Added
 
@@ -125,5 +138,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Best practices guide
 - Performance tuning tips
 
-[Unreleased]: https://github.com/xiaojinpro/xjp-secret-store-sdk/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/xiaojinpro/xjp-secret-store-sdk/releases/tag/v0.1.0
+[Unreleased]: https://github.com/rickyjim626/secret-store-sdk/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/rickyjim626/secret-store-sdk/compare/v0.1.0...v0.1.1
+[0.1.0]: https://github.com/rickyjim626/secret-store-sdk/releases/tag/v0.1.0
