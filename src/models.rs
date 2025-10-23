@@ -465,6 +465,27 @@ pub struct InitNamespaceResult {
     pub request_id: String,
 }
 
+/// Request for creating a namespace
+#[derive(Debug, Clone, Serialize)]
+pub struct CreateNamespaceRequest {
+    /// Namespace name to create
+    pub name: String,
+    /// Optional description
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+/// Result of namespace creation
+#[derive(Debug, Clone, Deserialize)]
+pub struct CreateNamespaceResult {
+    /// Success message
+    pub message: String,
+    /// Created namespace name
+    pub namespace: String,
+    /// Request ID
+    pub request_id: String,
+}
+
 /// Result of namespace deletion
 #[derive(Debug, Clone, Deserialize)]
 pub struct DeleteNamespaceResult {

@@ -662,6 +662,69 @@ impl Client {
         self.parse_json_response(response).await
     }
 
+    /// Create a new namespace
+    ///
+    /// Creates a new namespace in the secret store. Requires global admin permissions.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - The name of the namespace to create
+    /// * `description` - Optional description for the namespace
+    /// * `idempotency_key` - Optional idempotency key to prevent duplicate creation
+    ///
+    /// # Returns
+    ///
+    /// A `CreateNamespaceResult` containing the creation details.
+    ///
+    /// # Errors
+    ///
+    /// * `Error::Http` with status 403 if not authorized to create namespaces
+    /// * `Error::Http` with status 409 if the namespace already exists
+    /// * `Error::Http` with status 400 for invalid namespace names
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use secret_store_sdk::{Client, ClientBuilder, Auth};
+    /// # async fn example(client: &Client) -> Result<(), Box<dyn std::error::Error>> {
+    /// let result = client.create_namespace(
+    ///     "production",
+    ///     Some("Production environment secrets".to_string()),
+    ///     None
+    /// ).await?;
+    /// println!("Created namespace: {}", result.namespace);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn create_namespace(
+        &self,
+        name: &str,
+        description: Option<String>,
+        idempotency_key: Option<String>,
+    ) -> Result<CreateNamespaceResult> {
+        let url = self.endpoints.create_namespace();
+        let mut request = self.build_request(Method::POST, &url)?;
+
+        let body = CreateNamespaceRequest {
+            name: name.to_string(),
+            description,
+        };
+        request = request.json(&body);
+
+        // Add idempotency key if provided
+        if let Some(key) = idempotency_key {
+            request = request.header("X-Idempotency-Key", key);
+        }
+
+        let response = self.execute_with_retry(request).await?;
+
+        if !response.status().is_success() {
+            return Err(self.parse_error_response(response).await);
+        }
+
+        self.parse_json_response(response).await
+    }
+
     /// Get namespace information
     pub async fn get_namespace(&self, namespace: &str) -> Result<NamespaceInfo> {
         let url = self.endpoints.get_namespace(namespace);

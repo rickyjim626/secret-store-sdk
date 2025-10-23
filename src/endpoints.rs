@@ -110,6 +110,10 @@ impl Endpoints {
         self.url(&format!("{}/namespaces", API_V2_BASE))
     }
 
+    pub fn create_namespace(&self) -> String {
+        self.url(&format!("{}/namespaces", API_V2_BASE))
+    }
+
     #[allow(dead_code)]
     pub fn get_namespace(&self, namespace: &str) -> String {
         self.url(&format!(
